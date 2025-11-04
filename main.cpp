@@ -3,7 +3,6 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
-#include <map>
 #include <set>
 
 using namespace std;
@@ -11,102 +10,111 @@ using namespace std;
 const char* DB_FILE = "database.dat";
 const int MAX_KEY_LEN = 65;
 
-// In-memory structure for managing index-value pairs
+struct Record {
+    char key[MAX_KEY_LEN];
+    int value;
+    bool deleted;
+};
+
 class FileDatabase {
 private:
-    map<string, set<int>> data;
-    bool loaded;
+    fstream file;
     
-    void load() {
-        ifstream file(DB_FILE, ios::binary);
+    void openFile() {
+        file.open(DB_FILE, ios::in | ios::out | ios::binary);
         if (!file.is_open()) {
-            loaded = true;
-            return;
+            // Create file if it doesn't exist
+            ofstream newFile(DB_FILE, ios::binary);
+            newFile.close();
+            file.open(DB_FILE, ios::in | ios::out | ios::binary);
         }
-        
-        int count;
-        file.read((char*)&count, sizeof(count));
-        
-        for (int i = 0; i < count; i++) {
-            int keyLen;
-            file.read((char*)&keyLen, sizeof(keyLen));
-            
-            char key[MAX_KEY_LEN];
-            file.read(key, keyLen);
-            key[keyLen] = '\0';
-            
-            int valueCount;
-            file.read((char*)&valueCount, sizeof(valueCount));
-            
-            for (int j = 0; j < valueCount; j++) {
-                int value;
-                file.read((char*)&value, sizeof(value));
-                data[string(key)].insert(value);
-            }
-        }
-        
-        file.close();
-        loaded = true;
-    }
-    
-    void save() {
-        ofstream file(DB_FILE, ios::binary | ios::trunc);
-        
-        int count = data.size();
-        file.write((char*)&count, sizeof(count));
-        
-        for (auto& pair : data) {
-            int keyLen = pair.first.length();
-            file.write((char*)&keyLen, sizeof(keyLen));
-            file.write(pair.first.c_str(), keyLen);
-            
-            int valueCount = pair.second.size();
-            file.write((char*)&valueCount, sizeof(valueCount));
-            
-            for (int value : pair.second) {
-                file.write((char*)&value, sizeof(value));
-            }
-        }
-        
-        file.close();
     }
     
 public:
-    FileDatabase() : loaded(false) {
-        load();
+    FileDatabase() {
+        openFile();
     }
     
     ~FileDatabase() {
-        save();
+        if (file.is_open()) {
+            file.close();
+        }
     }
     
     void insert(const string& index, int value) {
-        if (!loaded) load();
-        data[index].insert(value);
+        // Check if record already exists
+        file.clear();
+        file.seekg(0, ios::beg);
+        
+        Record rec;
+        bool found = false;
+        
+        while (file.read((char*)&rec, sizeof(Record))) {
+            if (!rec.deleted && strcmp(rec.key, index.c_str()) == 0 && rec.value == value) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            // Add new record at the end
+            file.clear();
+            file.seekp(0, ios::end);
+            
+            Record newRec;
+            strncpy(newRec.key, index.c_str(), MAX_KEY_LEN - 1);
+            newRec.key[MAX_KEY_LEN - 1] = '\0';
+            newRec.value = value;
+            newRec.deleted = false;
+            
+            file.write((char*)&newRec, sizeof(Record));
+            file.flush();
+        }
     }
     
     void remove(const string& index, int value) {
-        if (!loaded) load();
-        auto it = data.find(index);
-        if (it != data.end()) {
-            it->second.erase(value);
-            if (it->second.empty()) {
-                data.erase(it);
+        file.clear();
+        file.seekg(0, ios::beg);
+        
+        Record rec;
+        streampos pos;
+        
+        while (file.read((char*)&rec, sizeof(Record))) {
+            if (!rec.deleted && strcmp(rec.key, index.c_str()) == 0 && rec.value == value) {
+                // Mark as deleted
+                pos = file.tellg();
+                pos -= sizeof(Record);
+                
+                rec.deleted = true;
+                
+                file.seekp(pos);
+                file.write((char*)&rec, sizeof(Record));
+                file.flush();
+                break;
             }
         }
     }
     
     void find(const string& index) {
-        if (!loaded) load();
-        auto it = data.find(index);
-        if (it == data.end() || it->second.empty()) {
+        file.clear();
+        file.seekg(0, ios::beg);
+        
+        vector<int> values;
+        Record rec;
+        
+        while (file.read((char*)&rec, sizeof(Record))) {
+            if (!rec.deleted && strcmp(rec.key, index.c_str()) == 0) {
+                values.push_back(rec.value);
+            }
+        }
+        
+        if (values.empty()) {
             cout << "null" << endl;
         } else {
-            bool first = true;
-            for (int value : it->second) {
-                if (!first) cout << " ";
-                cout << value;
-                first = false;
+            sort(values.begin(), values.end());
+            for (size_t i = 0; i < values.size(); i++) {
+                if (i > 0) cout << " ";
+                cout << values[i];
             }
             cout << endl;
         }
