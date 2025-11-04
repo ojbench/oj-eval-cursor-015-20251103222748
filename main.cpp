@@ -9,7 +9,6 @@
 using namespace std;
 
 const char* DB_FILE = "database.dat";
-const char* INDEX_FILE = "index.dat";
 const int MAX_KEY_LEN = 65;
 
 struct Record {
@@ -21,7 +20,7 @@ struct Record {
 class FileDatabase {
 private:
     fstream file;
-    map<string, set<pair<int, streampos>>> index; // key -> set of (value, file_position)
+    map<pair<string, int>, streampos> index; // (key, value) -> file_position, only for current run
     
     void openFile() {
         file.open(DB_FILE, ios::in | ios::out | ios::binary);
@@ -33,65 +32,28 @@ private:
         }
     }
     
-    void loadIndex() {
-        ifstream idxFile(INDEX_FILE, ios::binary);
-        if (idxFile.is_open()) {
-            int count;
-            idxFile.read((char*)&count, sizeof(count));
-            
-            for (int i = 0; i < count; i++) {
-                int keyLen;
-                idxFile.read((char*)&keyLen, sizeof(keyLen));
-                
-                char key[MAX_KEY_LEN];
-                idxFile.read(key, keyLen);
-                key[keyLen] = '\0';
-                
-                int valueCount;
-                idxFile.read((char*)&valueCount, sizeof(valueCount));
-                
-                for (int j = 0; j < valueCount; j++) {
-                    int value;
-                    streampos pos;
-                    idxFile.read((char*)&value, sizeof(value));
-                    idxFile.read((char*)&pos, sizeof(pos));
-                    index[string(key)].insert(make_pair(value, pos));
-                }
-            }
-            idxFile.close();
-        }
-    }
-    
-    void saveIndex() {
-        ofstream idxFile(INDEX_FILE, ios::binary | ios::trunc);
+    void buildIndex() {
+        // Build index by scanning the file once at startup
+        file.clear();
+        file.seekg(0, ios::beg);
         
-        int count = index.size();
-        idxFile.write((char*)&count, sizeof(count));
-        
-        for (auto& pair : index) {
-            int keyLen = pair.first.length();
-            idxFile.write((char*)&keyLen, sizeof(keyLen));
-            idxFile.write(pair.first.c_str(), keyLen);
-            
-            int valueCount = pair.second.size();
-            idxFile.write((char*)&valueCount, sizeof(valueCount));
-            
-            for (auto& vp : pair.second) {
-                idxFile.write((char*)&vp.first, sizeof(vp.first));
-                idxFile.write((char*)&vp.second, sizeof(vp.second));
+        Record rec;
+        while (file.read((char*)&rec, sizeof(Record))) {
+            if (!rec.deleted) {
+                streampos pos = file.tellg();
+                pos -= sizeof(Record);
+                index[make_pair(string(rec.key), rec.value)] = pos;
             }
         }
-        idxFile.close();
     }
     
 public:
     FileDatabase() {
         openFile();
-        loadIndex();
+        buildIndex();
     }
     
     ~FileDatabase() {
-        saveIndex();
         if (file.is_open()) {
             file.close();
         }
@@ -99,13 +61,9 @@ public:
     
     void insert(const string& index_key, int value) {
         // Check if record already exists in index
-        auto it = index.find(index_key);
-        if (it != index.end()) {
-            for (auto& vp : it->second) {
-                if (vp.first == value) {
-                    return; // Already exists
-                }
-            }
+        auto key = make_pair(index_key, value);
+        if (index.find(key) != index.end()) {
+            return; // Already exists
         }
         
         // Add new record at the end of file
@@ -123,51 +81,47 @@ public:
         file.flush();
         
         // Update index
-        index[index_key].insert(make_pair(value, pos));
+        index[key] = pos;
     }
     
     void remove(const string& index_key, int value) {
-        auto it = index.find(index_key);
+        auto key = make_pair(index_key, value);
+        auto it = index.find(key);
         if (it == index.end()) return;
         
-        streampos pos_to_delete = -1;
-        for (auto& vp : it->second) {
-            if (vp.first == value) {
-                pos_to_delete = vp.second;
-                break;
-            }
-        }
+        streampos pos_to_delete = it->second;
         
-        if (pos_to_delete != (streampos)-1) {
-            // Mark record as deleted in file
-            file.clear();
-            file.seekg(pos_to_delete);
-            Record rec;
-            file.read((char*)&rec, sizeof(Record));
-            rec.deleted = true;
-            
-            file.seekp(pos_to_delete);
-            file.write((char*)&rec, sizeof(Record));
-            file.flush();
-            
-            // Update index
-            it->second.erase(make_pair(value, pos_to_delete));
-            if (it->second.empty()) {
-                index.erase(it);
-            }
-        }
+        // Mark record as deleted in file
+        file.clear();
+        file.seekg(pos_to_delete);
+        Record rec;
+        file.read((char*)&rec, sizeof(Record));
+        rec.deleted = true;
+        
+        file.seekp(pos_to_delete);
+        file.write((char*)&rec, sizeof(Record));
+        file.flush();
+        
+        // Update index
+        index.erase(it);
     }
     
     void find(const string& index_key) {
-        auto it = index.find(index_key);
-        if (it == index.end() || it->second.empty()) {
+        vector<int> values;
+        
+        for (auto& kv : index) {
+            if (kv.first.first == index_key) {
+                values.push_back(kv.first.second);
+            }
+        }
+        
+        if (values.empty()) {
             cout << "null" << endl;
         } else {
-            bool first = true;
-            for (auto& vp : it->second) {
-                if (!first) cout << " ";
-                cout << vp.first;
-                first = false;
+            sort(values.begin(), values.end());
+            for (size_t i = 0; i < values.size(); i++) {
+                if (i > 0) cout << " ";
+                cout << values[i];
             }
             cout << endl;
         }
