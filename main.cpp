@@ -3,8 +3,9 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
-#include <map>
+#include <unordered_map>
 #include <set>
+#include <functional>
 
 using namespace std;
 
@@ -17,10 +18,18 @@ struct Record {
     bool deleted;
 };
 
+// Custom hash for pair<size_t, int>
+struct PairHash {
+    size_t operator()(const pair<size_t, int>& p) const {
+        return p.first ^ (p.second << 1);
+    }
+};
+
 class FileDatabase {
 private:
     fstream file;
-    map<pair<string, int>, streampos> index; // (key, value) -> file_position, only for current run
+    unordered_map<pair<size_t, int>, streampos, PairHash> index; // (key_hash, value) -> file_position
+    hash<string> hasher;
     
     void openFile() {
         file.open(DB_FILE, ios::in | ios::out | ios::binary);
@@ -42,7 +51,8 @@ private:
             if (!rec.deleted) {
                 streampos pos = file.tellg();
                 pos -= sizeof(Record);
-                index[make_pair(string(rec.key), rec.value)] = pos;
+                size_t key_hash = hasher(string(rec.key));
+                index[make_pair(key_hash, rec.value)] = pos;
             }
         }
     }
@@ -61,7 +71,8 @@ public:
     
     void insert(const string& index_key, int value) {
         // Check if record already exists in index
-        auto key = make_pair(index_key, value);
+        size_t key_hash = hasher(index_key);
+        auto key = make_pair(key_hash, value);
         if (index.find(key) != index.end()) {
             return; // Already exists
         }
@@ -85,7 +96,8 @@ public:
     }
     
     void remove(const string& index_key, int value) {
-        auto key = make_pair(index_key, value);
+        size_t key_hash = hasher(index_key);
+        auto key = make_pair(key_hash, value);
         auto it = index.find(key);
         if (it == index.end()) return;
         
@@ -107,10 +119,11 @@ public:
     }
     
     void find(const string& index_key) {
+        size_t key_hash = hasher(index_key);
         vector<int> values;
         
         for (auto& kv : index) {
-            if (kv.first.first == index_key) {
+            if (kv.first.first == key_hash) {
                 values.push_back(kv.first.second);
             }
         }
